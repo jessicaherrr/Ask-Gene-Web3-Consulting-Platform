@@ -1,0 +1,170 @@
+const { expect } = require("chai");
+const { ethers } = require("hardhat");
+
+describe("Ask Gene Smart Contracts", function () {
+  let ConsultingSession, FeedbackStorage;
+  let consultingSession, feedbackStorage;
+  let owner, client, consultant, platformWallet, otherAccount;
+  const SESSION_AMOUNT = ethers.parseEther("0.1");
+  const DURATION = 60;
+
+  beforeEach(async function () {
+    [owner, client, consultant, platformWallet, otherAccount] = await ethers.getSigners();
+    
+    ConsultingSession = await ethers.getContractFactory("ConsultingSession");
+    consultingSession = await ConsultingSession.deploy(platformWallet.address);
+    
+    FeedbackStorage = await ethers.getContractFactory("FeedbackStorage");
+    feedbackStorage = await FeedbackStorage.deploy(await consultingSession.getAddress());
+    
+    await consultingSession.transferOwnership(await feedbackStorage.getAddress());
+  });
+
+  describe("ConsultingSession Contract", function () {
+    it("Should deploy correctly", async function () {
+      expect(await consultingSession.getAddress()).to.properAddress;
+      expect(await consultingSession.platformWallet()).to.equal(platformWallet.address);
+    });
+
+    it("Should create a new session", async function () {
+      const scheduledTime = Math.floor(Date.now() / 1000) + 86400;
+      
+      await expect(
+        consultingSession.connect(client).createSession(
+          consultant.address,
+          DURATION,
+          scheduledTime,
+          { value: SESSION_AMOUNT }
+        )
+      ).to.emit(consultingSession, "SessionCreated");
+    });
+
+    it("Should confirm session", async function () {
+      const scheduledTime = Math.floor(Date.now() / 1000) + 86400;
+      await consultingSession.connect(client).createSession(
+        consultant.address,
+        DURATION,
+        scheduledTime,
+        { value: SESSION_AMOUNT }
+      );
+      
+      await expect(
+        consultingSession.connect(consultant).confirmSession(1)
+      ).to.emit(consultingSession, "SessionConfirmed");
+    });
+
+    it("Should not allow non-consultant to confirm session", async function () {
+      const scheduledTime = Math.floor(Date.now() / 1000) + 86400;
+      await consultingSession.connect(client).createSession(
+        consultant.address,
+        DURATION,
+        scheduledTime,
+        { value: SESSION_AMOUNT }
+      );
+      
+      await expect(
+        consultingSession.connect(otherAccount).confirmSession(1)
+      ).to.be.revertedWith("Not the session consultant");
+    });
+
+    it("Should complete and release payment", async function () {
+      const scheduledTime = Math.floor(Date.now() / 1000) + 3600;
+      await consultingSession.connect(client).createSession(
+        consultant.address,
+        DURATION,
+        scheduledTime,
+        { value: SESSION_AMOUNT }
+      );
+      
+      await consultingSession.connect(consultant).confirmSession(1);
+      
+      // 推进时间到会议时间之后
+      await ethers.provider.send("evm_increaseTime", [3700]);
+      await ethers.provider.send("evm_mine", []);
+      
+      await consultingSession.connect(client).confirmCompletion(1);
+      
+      const feedbackHash = ethers.keccak256(ethers.toUtf8Bytes("Great!"));
+      await feedbackStorage.connect(client).storeFeedbackHash(1, feedbackHash);
+      
+      await expect(
+        consultingSession.connect(client).releasePayment(1)
+      ).to.emit(consultingSession, "PaymentReleased");
+    });
+  });
+
+  describe("FeedbackStorage Contract", function () {
+    it("Should store feedback", async function () {
+      const scheduledTime = Math.floor(Date.now() / 1000) + 3600;
+      await consultingSession.connect(client).createSession(
+        consultant.address,
+        DURATION,
+        scheduledTime,
+        { value: SESSION_AMOUNT }
+      );
+      
+      await consultingSession.connect(consultant).confirmSession(1);
+      
+      await ethers.provider.send("evm_increaseTime", [3700]);
+      await ethers.provider.send("evm_mine", []);
+      
+      await consultingSession.connect(client).confirmCompletion(1);
+      
+      const feedbackHash = ethers.keccak256(ethers.toUtf8Bytes("Excellent!"));
+      await expect(
+        feedbackStorage.connect(client).storeFeedbackHash(1, feedbackHash)
+      ).to.emit(feedbackStorage, "FeedbackStored");
+    });
+
+    it("Should verify feedback", async function () {
+      const scheduledTime = Math.floor(Date.now() / 1000) + 3600;
+      await consultingSession.connect(client).createSession(
+        consultant.address,
+        DURATION,
+        scheduledTime,
+        { value: SESSION_AMOUNT }
+      );
+      
+      await consultingSession.connect(consultant).confirmSession(1);
+      
+      await ethers.provider.send("evm_increaseTime", [3700]);
+      await ethers.provider.send("evm_mine", []);
+      
+      await consultingSession.connect(client).confirmCompletion(1);
+      
+      const feedbackHash = ethers.keccak256(ethers.toUtf8Bytes("Test feedback"));
+      await feedbackStorage.connect(client).storeFeedbackHash(1, feedbackHash);
+      
+      await expect(
+        feedbackStorage.connect(owner).verifyFeedback(1, feedbackHash)
+      ).to.emit(feedbackStorage, "FeedbackVerified");
+    });
+  });
+
+  describe("Refund Scenarios", function () {
+    it("Should refund if consultant doesn't confirm within 24 hours", async function () {
+      const scheduledTime = Math.floor(Date.now() / 1000) + 3600;
+      
+      await consultingSession.connect(client).createSession(
+        consultant.address,
+        DURATION,
+        scheduledTime,
+        { value: SESSION_AMOUNT }
+      );
+      
+      // 推进时间 25 小时（超过 24 小时确认期限）
+      await ethers.provider.send("evm_increaseTime", [25 * 3600]);
+      await ethers.provider.send("evm_mine", []);
+
+      const clientBalanceBefore = await ethers.provider.getBalance(client.address);
+
+      // Request refund
+      await expect(
+        consultingSession.connect(client).refund(1)
+      ).to.emit(consultingSession, "PaymentRefunded");
+
+      const clientBalanceAfter = await ethers.provider.getBalance(client.address);
+      expect(clientBalanceAfter).to.be.gt(clientBalanceBefore);
+    });
+  });
+});

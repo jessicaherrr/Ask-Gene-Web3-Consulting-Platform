@@ -1,0 +1,15 @@
+{
+  "consultingSession": "0x4dF00c67bB55295347f4e3BA9634ffF8270E9EDe",
+  "feedbackStorage": "0x1c0E8C70dc36555F46c73E4d550A5257ac8A9264",
+  "platformWallet": "0x4CB749132342Aa9611bC8d10fE413864FF6F3184",
+  "network": "polygon-amoy",
+  "chainId": 80002,
+  "deployer": "0x4CB749132342Aa9611bC8d10fE413864FF6F3184",
+  "deployerBalance": "0.3",
+  "deployedAt": "2026-01-14T11:04:51.325Z",
+  "transactions": {
+    "consultingSession": "0xc7bc3acec0acb23cb95b56a48c31cbb6af64fd87de62979b83559cc7e4afb011",
+    "feedbackStorage": "0x6915ae77baa4057b4b76c16f775b17c8c97c86d5236c789d00b12eb0a021fed8",
+    "ownershipTransfer": "0x4204d04784dc2c3c071651004142ae306172b3c5bf90b214fe65fc5e1f1b86ad"
+  }
+}
