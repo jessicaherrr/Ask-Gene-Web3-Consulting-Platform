@@ -1,15 +1,14 @@
-// app/layout.tsx
 import type { Metadata } from 'next';
 import { Inter } from 'next/font/google';
 import './globals.css';
-import { Web3Provider } from '@/components/providers/Web3Provider';
-import Header from '@/components/common/Header';
+import { Providers } from '@/components/providers'; // 从 index.tsx 导入
+import { PaymentProvider } from './components/providers/PaymentProvider';
 
 const inter = Inter({ subsets: ['latin'] });
 
 export const metadata: Metadata = {
-  title: 'AskGene Web3 - Find Blockchain Experts',
-  description: 'Connect with verified Web3 consultants and blockchain experts',
+  title: 'AskGene Web3 - Consultation Platform',
+  description: 'Book blockchain consultations with experts',
 };
 
 export default function RootLayout({
@@ -19,14 +18,12 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className={`${inter.className} bg-gray-950 text-white`}>
-        <Web3Provider>
-          <div className="min-h-screen flex flex-col">
-            <Header />
-            <main className="flex-1">{children}</main>
-            {/* Footer can be added here */}
-          </div>
-        </Web3Provider>
+      <body className={inter.className}>
+        <Providers>
+          <PaymentProvider>
+            {children}
+          </PaymentProvider>
+        </Providers>
       </body>
     </html>
   );

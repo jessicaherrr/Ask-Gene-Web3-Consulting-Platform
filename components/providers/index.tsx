@@ -15,12 +15,17 @@ export function Providers({ children }: { children: ReactNode }) {
       <QueryClientProvider client={queryClient}>
         <RainbowKitProvider
           theme={darkTheme({
-            accentColor: '#3b82f6',
+            accentColor: '#6366f1', // 使用 Indigo 颜色
             accentColorForeground: 'white',
-            borderRadius: 'medium',
+            borderRadius: 'large',
             fontStack: 'system',
             overlayBlur: 'small',
           })}
+          coolMode
+          appInfo={{
+            appName: 'AskGene Web3',
+            learnMoreUrl: 'https://docs.askgene.com',
+          }}
         >
           {children}
         </RainbowKitProvider>

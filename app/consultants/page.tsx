@@ -7,7 +7,7 @@ export const metadata = {
   description: 'Browse verified Web3 consultants, smart contract auditors, DeFi experts and blockchain developers.',
 };
 
-// 获取咨询顾问数据的服务端函数
+// Server-side function for retrieving consultant data
 async function getConsultants() {
   try {
     const { data, error } = await supabase
