@@ -3,26 +3,30 @@ import { createClient } from '@/lib/supabase/server';
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const supabase = createClient();
-    const { id } = params;
+    const { id } = await params;
+    
+    const supabase = await createClient();
 
-    const { data: consultant, error } = await (await supabase)
+    console.log('Fetching consultant with ID:', id);
+
+    const { data: consultant, error } = await supabase
       .from('consultants')
       .select('*')
       .eq('id', id)
       .single();
 
     if (error) {
-      console.error('Error fetching consultant:', error);
+      console.error('Supabase error:', error);
       return NextResponse.json(
         { error: 'Consultant not found' },
         { status: 404 }
       );
     }
 
+    console.log('Found consultant:', consultant);
     return NextResponse.json(consultant);
   } catch (error: any) {
     console.error('Unexpected error:', error);

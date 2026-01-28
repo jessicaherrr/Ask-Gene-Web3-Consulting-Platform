@@ -5,7 +5,6 @@ import { useAccount, useWriteContract, useWaitForTransactionReceipt } from 'wagm
 import { parseEther } from 'viem';
 import { CONSULTING_SESSION_ABI, CONSULTING_SESSION_ADDRESS } from '@/lib/blockchain/config';
 import { PaymentSessionData } from '@/types/payment';
-import { createConsultationRecord } from '@/lib/supabase/client';
 
 interface CryptoPaymentProps {
   sessionData: PaymentSessionData;
@@ -19,9 +18,12 @@ export const CryptoPayment = ({
   onSuccess,
 }: CryptoPaymentProps) => {
   const { address } = useAccount();
+  
+  // State variables
   const [bookingNotes, setBookingNotes] = useState('');
   const [error, setError] = useState<string>('');
   const [sessionId, setSessionId] = useState<number | null>(null);
+  const [consultationId, setConsultationId] = useState<string | null>(null);
 
   // Contract write hook for creating session
   const {
@@ -42,15 +44,15 @@ export const CryptoPayment = ({
     onProcessingChange(processing);
   }, [isCreating, isConfirming, onProcessingChange]);
 
-  // Handle successful transaction
+  // Handle successful transaction - save to database with real transaction hash
   useEffect(() => {
-    if (isSuccess && hash && address) {
+    if (isSuccess && hash && address && consultationId) {
       console.log('✅ Smart contract transaction confirmed:', hash);
-      saveConsultationToDatabase(hash);
+      saveTransactionToDatabase(hash, consultationId);
     }
-  }, [isSuccess, hash, address]);
+  }, [isSuccess, hash, address, consultationId]);
 
-  // Handle errors
+  // Handle contract errors
   useEffect(() => {
     if (createError) {
       console.error('❌ Contract error:', createError);
@@ -59,31 +61,35 @@ export const CryptoPayment = ({
     }
   }, [createError, onProcessingChange]);
 
-  // Save consultation to Supabase with transaction hash
-  const saveConsultationToDatabase = async (txHash: string) => {
+  /**
+   * Save transaction to database with real transaction hash
+   * Updates the consultation record with blockchain transaction details
+   */
+  const saveTransactionToDatabase = async (txHash: string, consultationId: string) => {
     try {
-      console.log('💾 Saving to Supabase...');
+      console.log('💾 Updating transaction in database...');
       
-      const consultationData = {
-        id: sessionData.sessionId,
-        client_id: address!,
-        consultant_id: sessionData.consultantId,
-        scheduled_time: sessionData.dateTime,
-        amount: sessionData.amount,
-        status: 'scheduled',
-        transaction_hash: txHash,
-        contract_address: CONSULTING_SESSION_ADDRESS,
-        contract_session_id: sessionId, // Store the contract session ID
-        notes: bookingNotes,
-        duration_minutes: sessionData.duration,
-        payment_method: 'crypto',
-      };
+      // Update transaction with real hash and consultation ID
+      const updateResponse = await fetch('/api/escrow/update-transaction', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          consultationId,
+          transactionHash: txHash,
+          contractSessionId: sessionId,
+          paymentMethod: 'crypto',
+          status: 'confirming',
+        }),
+      });
 
-      console.log('📦 Consultation data:', consultationData);
-
-      const result = await createConsultationRecord(consultationData);
+      const updateResult = await updateResponse.json();
       
-      console.log('✅ Saved to Supabase:', result);
+      if (!updateResult.success) {
+        console.warn('⚠️ Failed to update transaction:', updateResult.error);
+        // Continue even if update fails - transaction already succeeded on blockchain
+      } else {
+        console.log('✅ Transaction saved to database:', updateResult.data);
+      }
 
       // Wait a moment then trigger success
       setTimeout(() => {
@@ -93,7 +99,7 @@ export const CryptoPayment = ({
 
     } catch (err: any) {
       console.error('❌ Error saving to database:', err);
-      setError('Failed to save booking. Transaction succeeded but record not saved.');
+      setError('Failed to save transaction. Payment succeeded but record not saved.');
       // Even if DB save fails, contract transaction is already complete
       setTimeout(() => {
         onSuccess();
@@ -101,7 +107,31 @@ export const CryptoPayment = ({
     }
   };
 
-  // Handle payment submission - CREATE ESCROW CONTRACT SESSION
+  /**
+   * Calculate duration in hours with maximum limit
+   */
+  const calculateDurationHours = (minutes: number): number => {
+    // Maximum duration limit (4 hours = 240 minutes)
+    const MAX_DURATION_MINUTES = 240;
+    
+    if (minutes > MAX_DURATION_MINUTES) {
+      throw new Error(`Duration cannot exceed ${MAX_DURATION_MINUTES} minutes (4 hours)`);
+    }
+    
+    if (minutes <= 0) {
+      throw new Error('Duration must be greater than 0');
+    }
+    
+    // Convert minutes to hours with 2 decimal places
+    return parseFloat((minutes / 60).toFixed(2));
+  };
+
+  /**
+   * Handle payment submission - Complete escrow creation flow
+   * 1. Create consultation record
+   * 2. Create escrow session in database
+   * 3. Call smart contract
+   */
   const handlePayment = async () => {
     setError('');
     
@@ -110,28 +140,112 @@ export const CryptoPayment = ({
       return;
     }
 
-    // Validate inputs
-    if (!sessionData.dateTime) {
-      setError('Invalid date/time selected');
-      return;
-    }
-
     try {
-      console.log('🚀 Starting escrow contract creation...');
+      console.log('🚀 Starting payment process...');
       
-      // Convert amount to wei (MATIC)
+      // 1. First create consultation record in database
+      console.log('📝 Creating consultation record...');
+      
+      // Calculate duration in hours with validation
+      let durationHours: number;
+      try {
+        durationHours = calculateDurationHours(sessionData.duration || 60);
+      } catch (durationError: any) {
+        throw new Error(durationError.message);
+      }
+      
+      // Calculate hourly rate
+      const hourlyRate = sessionData.hourlyRate || 
+        parseFloat((sessionData.amount / durationHours).toFixed(2));
+      
+      // Format request data
+      const consultationData = {
+        consultant_id: sessionData.consultantId,
+        client_wallet_address: address,
+        scheduled_for: sessionData.dateTime,
+        duration_hours: durationHours,
+        hourly_rate: hourlyRate,
+        total_amount: sessionData.amount,
+        title: sessionData.title || `Consultation with ${sessionData.consultantName}`,
+        description: bookingNotes || sessionData.description || '',
+        payment_method: 'crypto',
+        currency: sessionData.currency || 'USD',
+        notes: bookingNotes || undefined,
+      };
+
+      console.log('📊 Consultation data:', consultationData);
+
+      const consultationResponse = await fetch('/api/consultations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(consultationData),
+      });
+
+      const consultationResult = await consultationResponse.json();
+      
+      if (!consultationResult.success) {
+        // Extract and handle specific errors
+        const errorMsg = consultationResult.error || 'Failed to create consultation';
+        
+        if (errorMsg.includes('Duration too long') || errorMsg.includes('duration')) {
+          throw new Error('Consultation duration is too long. Maximum allowed is 4 hours (240 minutes).');
+        }
+        
+        throw new Error(errorMsg);
+      }
+
+      // Get and store the real consultation ID
+      const newConsultationId = consultationResult.booking_id || 
+                               consultationResult.data?.consultation?.id ||
+                               consultationResult.data?.id;
+      
+      if (!newConsultationId) {
+        throw new Error('Failed to get consultation ID from response');
+      }
+      
+      setConsultationId(newConsultationId);
+      console.log('✅ Consultation created:', newConsultationId);
+
+      // 2. Create escrow session in database with the real consultation ID
+      console.log('💾 Creating escrow session in database...');
+      const escrowResponse = await fetch('/api/escrow/create-session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          consultationId: newConsultationId,
+          consultantId: sessionData.consultantId,
+          scheduledTime: sessionData.dateTime,
+          amount: sessionData.amount,
+          customerAddress: address,
+          customerEmail: sessionData.customerEmail,
+          sessionDuration: sessionData.duration,
+          durationHours: durationHours,
+        }),
+      });
+
+      const escrowResult = await escrowResponse.json();
+      
+      if (!escrowResult.success) {
+        throw new Error(escrowResult.error || 'Failed to create escrow session');
+      }
+
+      console.log('✅ Escrow session created in DB:', escrowResult.contractSessionId);
+
+      // 3. Save the contract session ID for later database updates
+      setSessionId(escrowResult.contractSessionId);
+      
+      // 4. Convert amount to wei (MATIC)
       const amountInWei = parseEther(sessionData.amount.toString());
       console.log(`💰 Amount: ${sessionData.amount} MATIC = ${amountInWei.toString()} wei`);
 
-      // Calculate scheduled time as Unix timestamp (seconds)
+      // 5. Calculate scheduled time as Unix timestamp (seconds)
       const scheduledTime = Math.floor(new Date(sessionData.dateTime).getTime() / 1000);
       console.log(`📅 Scheduled time: ${new Date(sessionData.dateTime).toISOString()} = ${scheduledTime} (Unix)`);
 
       // Validate future time
       const currentTime = Math.floor(Date.now() / 1000);
       if (scheduledTime <= currentTime) {
-        setError('Please select a future date and time');
-        return;
+        throw new Error('Please select a future date and time');
       }
 
       console.log('📝 Calling smart contract createSession()...');
@@ -142,7 +256,7 @@ export const CryptoPayment = ({
         amount: amountInWei.toString(),
       });
 
-      // Call smart contract to create escrow session
+      // 6. Call smart contract to create escrow session
       createSession({
         address: CONSULTING_SESSION_ADDRESS,
         abi: CONSULTING_SESSION_ABI,
@@ -160,6 +274,7 @@ export const CryptoPayment = ({
     } catch (err: any) {
       console.error('❌ Payment initiation error:', err);
       setError(`Failed to initiate payment: ${err.message}`);
+      onProcessingChange(false);
     }
   };
 
@@ -208,6 +323,12 @@ export const CryptoPayment = ({
             </span>
           </div>
           <div className="flex justify-between">
+            <span className="text-gray-600 dark:text-gray-400">Duration</span>
+            <span className="text-gray-700 dark:text-gray-300">
+              {sessionData.duration} minutes ({(sessionData.duration / 60).toFixed(1)} hours)
+            </span>
+          </div>
+          <div className="flex justify-between">
             <span className="text-gray-600 dark:text-gray-400">Contract Address</span>
             <span className="text-xs font-mono text-gray-700 dark:text-gray-300 truncate ml-2">
               {CONSULTING_SESSION_ADDRESS.slice(0, 6)}...{CONSULTING_SESSION_ADDRESS.slice(-4)}
@@ -219,6 +340,20 @@ export const CryptoPayment = ({
           </div>
         </div>
       </div>
+
+      {/* Duration Warning */}
+      {(sessionData.duration || 0) > 240 && (
+        <div className="p-3 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
+          <div className="flex items-center">
+            <svg className="w-5 h-5 text-yellow-500 mr-2" fill="currentColor" viewBox="0 0 20 20">
+              <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+            </svg>
+            <span className="text-sm text-yellow-700 dark:text-yellow-300">
+              Duration exceeds maximum limit. Please select a duration of 4 hours or less.
+            </span>
+          </div>
+        </div>
+      )}
 
       {/* Status Messages */}
       {isCreating && (
@@ -276,7 +411,7 @@ export const CryptoPayment = ({
       {/* Pay Button */}
       <button
         onClick={handlePayment}
-        disabled={isCreating || isConfirming || isSuccess || !address}
+        disabled={isCreating || isConfirming || isSuccess || !address || (sessionData.duration || 0) > 240}
         className="w-full py-3 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-semibold rounded-lg transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
       >
         {isCreating ? (

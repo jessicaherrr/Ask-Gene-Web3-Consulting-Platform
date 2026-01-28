@@ -46,7 +46,10 @@ export async function GET(request: NextRequest) {
           expertise,
           hourly_rate,
           rating,
-          is_verified
+          is_verified,
+          is_active,
+          min_duration_hours,
+          max_duration_hours
         )
       `, { count: 'exact' })
       .eq('client_wallet_address', walletAddress); // Note: your field is client_wallet_address
@@ -82,7 +85,7 @@ export async function GET(request: NextRequest) {
     
     console.log(`✅ Found ${consultations?.length || 0} consultations`);
     
-    // Calculate statistics based on YOUR status values
+    // Define stats type with index signature
     const stats = {
       total: count || 0,
       pending: 0,
@@ -92,12 +95,18 @@ export async function GET(request: NextRequest) {
       cancelled: 0
     };
     
+    // Type guard for status checking
+    const isValidStatus = (status: string): status is keyof typeof stats => {
+      return status in stats && status !== 'total';
+    };
+    
     // Format data and calculate stats
     const now = new Date();
     const formattedConsultations = consultations?.map(consultation => {
-      // Count by status
-      if (consultation.status in stats) {
-        stats[consultation.status]++;
+      // Count by status using type-safe approach
+      const status = consultation.status;
+      if (isValidStatus(status)) {
+        stats[status]++;
       }
       
       // Calculate derived fields
@@ -121,7 +130,7 @@ export async function GET(request: NextRequest) {
         notes: consultation.notes,
         created_at: consultation.created_at,
         updated_at: consultation.updated_at,
-        // Consultant details
+        // Consultant details with type safety
         consultant: consultation.consultant || null,
         // Derived fields
         is_upcoming: scheduledTime > now,
@@ -196,11 +205,11 @@ export async function POST(request: NextRequest) {
       );
     }
     
-    // Validate consultant exists
+    // Validate consultant exists - fetch ALL needed fields including duration limits
     console.log(`🔍 Validating consultant: ${body.consultant_id}`);
     const { data: consultant, error: consultantError } = await supabase
       .from('consultants')
-      .select('id, name, hourly_rate, is_verified, is_active')
+      .select('id, name, hourly_rate, is_verified, is_active, min_duration_hours, max_duration_hours')
       .eq('id', body.consultant_id)
       .single();
     
@@ -258,20 +267,24 @@ export async function POST(request: NextRequest) {
       );
     }
     
-    // Validate duration
+    // Validate duration with type-safe check
     const durationHours = body.duration_hours;
-    if (durationHours < (consultant.min_duration_hours || 1)) {
+    
+    // Check min duration (with fallback to 1 hour)
+    const minDuration = consultant.min_duration_hours ?? 1;
+    if (durationHours < minDuration) {
       return NextResponse.json(
         {
           error: 'Duration too short',
-          message: `Minimum duration is ${consultant.min_duration_hours || 1} hours`,
+          message: `Minimum duration is ${minDuration} hours`,
           requested: durationHours,
-          minimum: consultant.min_duration_hours || 1
+          minimum: minDuration
         },
         { status: 400 }
       );
     }
     
+    // Check max duration if it exists
     if (consultant.max_duration_hours && durationHours > consultant.max_duration_hours) {
       return NextResponse.json(
         {
@@ -340,7 +353,9 @@ export async function POST(request: NextRequest) {
         consultation: newConsultation,
         consultant: {
           name: consultant.name,
-          hourly_rate: consultant.hourly_rate
+          hourly_rate: consultant.hourly_rate,
+          min_duration_hours: minDuration,
+          max_duration_hours: consultant.max_duration_hours
         },
         payment: {
           required: true,

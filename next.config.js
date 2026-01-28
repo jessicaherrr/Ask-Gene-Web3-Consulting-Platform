@@ -1,29 +1,48 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  reactStrictMode: true, // Enable React strict mode for additional development warnings
-  serverExternalPackages: ['@supabase/supabase-js'], // External packages to exclude from server bundles (moved from experimental)
+  reactStrictMode: true,
+  serverExternalPackages: ['@supabase/supabase-js'],
+  
+  // Fix images configuration
   images: {
-    domains: [
-      'vbhwudyvjpgtbzvybxrx.supabase.co', // Supabase storage domain for images
-      'lh3.googleusercontent.com', // Google user content domain (for Google OAuth avatars)
-      'avatars.githubusercontent.com', // GitHub avatars domain (for GitHub OAuth)
+    remotePatterns: [
+      {
+        protocol: 'https',
+        hostname: 'vbhwudyvjpgtbzvybxrx.supabase.co',
+      },
+      {
+        protocol: 'https',
+        hostname: 'lh3.googleusercontent.com',
+      },
+      {
+        protocol: 'https',
+        hostname: 'avatars.githubusercontent.com',
+      },
     ],
   },
+  
+  // Configure Turbopack - add empty object to satisfy Next.js
+  // In Next.js 16+, turbopack is a top-level key, not under experimental
+  turbopack: {
+    // Empty configuration - this tells Next.js we accept the default Turbopack behavior
+  },
+  
+  // Webpack configuration will be ignored when Turbopack is enabled
+  // But we keep it for compatibility
   webpack: (config, { isServer }) => {
     if (!isServer) {
-      // Configure webpack fallbacks for client-side builds
       config.resolve.fallback = {
-        fs: false, // File system module - not needed in browser
-        net: false, // Networking module - not needed in browser
-        tls: false, // TLS module - not needed in browser
-        '@react-native-async-storage/async-storage': false, // React Native module - not needed in web
-        'pino-pretty': false, // Logging formatter - optional dependency
-        crypto: false, // Crypto module - browser provides native implementation
-        stream: false, // Stream module - browser provides native implementation
+        fs: false,
+        net: false,
+        tls: false,
+        '@react-native-async-storage/async-storage': false,
+        'pino-pretty': false,
+        crypto: false,
+        stream: false,
       };
     }
-    return config; // Return the modified webpack configuration
+    return config;
   },
 }
 
-module.exports = nextConfig; // Export the configuration object
+module.exports = nextConfig;

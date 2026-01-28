@@ -1,46 +1,82 @@
+// /app/api/stripe/create-payment-intent/route.ts
 import { NextRequest, NextResponse } from 'next/server';
+import Stripe from 'stripe';
+
+// Simplest initialization - only using the secret key
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { amount, currency, consultantId, sessionId, customerEmail, customerName } = body;
+    const { 
+      amount, 
+      currency = 'usd',
+      consultantId, 
+      customerEmail, 
+      customerName,
+      scheduledTime,
+      sessionDuration = 30
+    } = body;
 
-    // Log the request for debugging
-    console.log('🎯 Demo Payment Request:', {
+    // Validate required fields
+    if (!amount || !consultantId || !customerEmail) {
+      return NextResponse.json({
+        success: false,
+        error: 'Missing required fields: amount, consultantId, customerEmail',
+      }, { status: 400 });
+    }
+
+    console.log('🎯 Creating payment intent:', {
       amount: `$${(amount / 100).toFixed(2)}`,
-      currency,
       consultantId,
-      sessionId,
-      customerEmail: customerEmail ? `${customerEmail.substring(0, 3)}***` : 'not provided',
+      customerEmail: customerEmail.substring(0, 3) + '***',
     });
 
-    // Simulate API processing delay
-    await new Promise(resolve => setTimeout(resolve, 500));
+    // Generate transaction ID
+    const transactionId = `txn_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
 
-    // Generate mock response
-    const timestamp = Date.now();
-    const mockId = `pi_demo_${timestamp}_${Math.random().toString(36).substring(2, 8)}`;
-    
+    // Create Stripe Payment Intent
+    const paymentIntent = await stripe.paymentIntents.create({
+      amount: amount,
+      currency: currency.toLowerCase(),
+      metadata: {
+        transactionId,
+        consultantId,
+        customerEmail,
+        scheduledTime: scheduledTime || '',
+        sessionDuration: String(sessionDuration),
+      },
+      description: `Consultation session with ${consultantId}`,
+      receipt_email: customerEmail,
+      // Optional: For saving payment method for future use
+      // setup_future_usage: 'off_session',
+    });
+
+    console.log('✅ Payment intent created successfully:', {
+      paymentIntentId: paymentIntent.id,
+      transactionId,
+      status: paymentIntent.status,
+      amount: `$${(paymentIntent.amount / 100).toFixed(2)}`,
+    });
+
     return NextResponse.json({
       success: true,
-      clientSecret: `${mockId}_secret_${Math.random().toString(36).substring(2, 12)}`,
-      paymentIntentId: mockId,
+      clientSecret: paymentIntent.client_secret,
+      paymentIntentId: paymentIntent.id,
+      transactionId: transactionId,
       amount: amount,
       currency: currency,
-      status: 'requires_payment_method',
-      demo: true,
-      message: 'Payment intent created in demo mode',
-      nextSteps: 'In production, this would connect to Stripe for real payments'
+      status: paymentIntent.status,
+      livemode: paymentIntent.livemode,
     });
     
   } catch (error: any) {
-    console.error('❌ Demo payment error:', error);
+    console.error('❌ Payment processing error:', error);
     
     return NextResponse.json({
       success: false,
-      error: 'Demo payment failed',
-      message: error.message || 'Unknown error',
-      demo: true
+      error: 'Payment processing failed',
+      message: error.message || 'An unknown error occurred',
     }, { status: 500 });
   }
 }
